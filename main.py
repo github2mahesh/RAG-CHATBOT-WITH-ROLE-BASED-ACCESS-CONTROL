@@ -5,6 +5,10 @@ from langchain_chroma import Chroma
 from langchain_groq import ChatGroq
 import os
 from dotenv import load_dotenv
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from typing import Dict, List
+from pydantic import BaseModel
 
 base_path = "data"
 
@@ -98,24 +102,101 @@ llm = ChatGroq(
         api_key=os.getenv("GROQ_API_KEY")
     )
 
-query = "What is the revenue growth?"
+security = HTTPBasic()
+# ─── USER DATABASE ────────────────────────────────────────────
+users_db: Dict[str, Dict[str, str]] = {
+    "Tony":    {"password": "password123", "role": "engineering"},
+    "Bruce":   {"password": "securepass",  "role": "marketing"},
+    "Sam":     {"password": "financepass", "role": "finance"},
+    "Peter":   {"password": "pete123",     "role": "engineering"},
+    "Sid":     {"password": "sidpass123",  "role": "marketing"},
+    "Natasha": {"password": "hrpass123",   "role": "hr"},
+    "Nick":    {"password": "ceopass",     "role": "c-level"},
+    "Happy":   {"password": "emppass",     "role": "employee"},
+}
 
-results = vector_store.similarity_search(
-    query,
-    k=5,
-    filter={"department": "finance"}  
-)
 
-context = "\n\n".join([doc.page_content for doc in results])
 
-messages = [
-    (
-        "system",
-        "Answer the question using only the provided context. say I dont know if dont know the answer",
-    ),
-    ("human", f"Context:\n{context}\n\nQuestion: {query}"),
-]
+# ─── ROLE → DEPARTMENT MAPPING ────────────────────────────────
+# Each role defines which ChromaDB `department` metadata values it can query.
+# None means no filter = access everything (c-level).
+ROLE_DEPT_MAP: Dict[str, list | None] = {
+    "finance":     ["finance"],
+    "marketing":   ["marketing"],
+    "hr":          ["hr"],
+    "engineering": ["engineering"],
+    "c-level":     None,               # no filter = all departments
+    "employee":    ["general"],        # general = policies, FAQs, events
+}
 
-response = llm.invoke(messages)
+def authenticate(credentials: HTTPBasicCredentials = Depends(security)):
+    user = users_db.get(credentials.username)
+    if not user or user["password"] != credentials.password:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    return {"username": credentials.username, "role": user["role"]}
 
-print(response.content)
+app = FastAPI()
+
+# ─── REQUEST BODY ─────────────────────────────────────────────
+class ChatRequest(BaseModel):
+    message: str
+
+# ─── ENDPOINTS ────────────────────────────────────────────────
+@app.get("/login")
+def login(user=Depends(authenticate)):
+    return {"message": f"Welcome {user['username']}!", "role": user["role"]}
+
+
+@app.post("/chat")
+def chat(body: ChatRequest, user=Depends(authenticate)):
+    role      = user["role"]
+    query     = body.message
+    allowed   = ROLE_DEPT_MAP.get(role)   # None = no restriction
+
+    # Build ChromaDB filter
+    if allowed is None:
+        # c-level: no filter, search all documents
+        results = vector_store.similarity_search(query, k=5)
+    elif len(allowed) == 1:
+        # Single department: simple equality filter
+        results = vector_store.similarity_search(
+            query, k=5,
+            filter={"department": allowed[0]}
+        )
+    else:
+        # Multiple departments: $in operator
+        results = vector_store.similarity_search(
+            query, k=5,
+            filter={"department": {"$in": allowed}}
+        )
+
+    if not results:
+        return {
+            "answer": "I don't have any relevant information for your query.",
+            "sources": []
+        }
+
+    # Build context + collect sources
+    context = "\n\n".join([doc.page_content for doc in results])
+    sources = list({
+        f"{doc.metadata.get('department', '?')} / {doc.metadata.get('source_file', '?')}"
+        for doc in results
+    })
+
+    # Prompt
+    messages = [
+        ("system",
+         "You are a company assistant. Answer ONLY using the provided context. "
+         "If the answer is not in the context, say 'I don't know'. "
+         "Be concise and factual."),
+        ("human", f"Context:\n{context}\n\nQuestion: {query}"),
+    ]
+
+    response = llm.invoke(messages)
+
+    return {
+        "answer":  response.content,
+        "sources": sources,         
+        "role":    role,
+    }
+
