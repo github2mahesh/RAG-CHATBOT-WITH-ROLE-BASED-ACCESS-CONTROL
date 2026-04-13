@@ -11,7 +11,9 @@ dependencies = [
     "langchain-groq>=1.1.2",
     "langchain-huggingface>=1.2.1",
     "markdown>=3.10.2",
+    "requests>=2.33.1",
     "sentence-transformers>=5.4.0",
+    "streamlit>=1.56.0",
     "unstructured>=0.22.18",
     "uvicorn>=0.44.0",
 ]

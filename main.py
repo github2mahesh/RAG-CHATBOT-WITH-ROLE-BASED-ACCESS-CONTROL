@@ -188,7 +188,8 @@ def chat(body: ChatRequest, user=Depends(authenticate)):
         ("system",
          "You are a company assistant. Answer ONLY using the provided context. "
          "If the answer is not in the context, say 'I don't know'. "
-         "Be concise and factual."),
+         f"you have access to only {role}, if they ask you anything other than {role}, just say I dont have access"
+         "Be concise and factual. If they wish you hi, hello, good morning etc you can also wish"),
         ("human", f"Context:\n{context}\n\nQuestion: {query}"),
     ]
 
