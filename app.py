@@ -22,6 +22,20 @@ if "role" not in st.session_state:
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []   # list of {"role": "user"|"assistant", "content": ..., "sources": [...]}
 
+# ── Helper: convert session history to the format the API expects ─
+def build_history_payload() -> list[dict]:
+    """
+    Take the last 6 messages from session state (excluding the one
+    just added) and format them for the API.
+    We exclude the last entry because that's the current user message
+    we just appended — the API receives it separately as `message`.
+    """
+    recent = st.session_state.chat_history[-7:-1]   # last 6, skip the one just added
+    return [
+        {"role": msg["role"], "content": msg["content"]}
+        for msg in recent
+        if msg["role"] in ("user", "assistant")     # skip any other roles if added later
+    ]
 # ── Role badge colours ────────────────────────────────────────────
 ROLE_COLOURS = {
     "finance":     "#1D9E75",   # teal
@@ -93,12 +107,16 @@ def show_chat():
     # st.chat_message creates a styled bubble (user or assistant)
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
-            st.write(msg["content"])
-            # Show sources only on assistant messages
-            if msg["role"] == "assistant" and msg.get("sources"):
-                with st.expander("📄 Sources"):
-                    for src in msg["sources"]:
-                        st.write(f"• {src}")
+            if msg.get("blocked"):
+                st.warning(msg["content"])
+            else:
+                st.write(msg["content"])
+                if msg.get("redacted"):
+                    st.caption("⚠️ Some sensitive information was redacted from this response.")
+                if msg["role"] == "assistant" and msg.get("sources"):
+                    with st.expander("📄 Sources"):
+                        for src in msg["sources"]:
+                            st.write(f"• {src}")
 
     # ── Input box at the bottom ───────────────────────────────────
     # st.chat_input pins a text box to the bottom of the page
@@ -116,13 +134,21 @@ def show_chat():
             "sources": [],
         })
 
-        # 3. Call FastAPI /chat
+        # 3. Call FastAPI /chat  — was json={"message": user_input}
         with st.spinner("Thinking..."):
-            response = requests.post(
-                f"{API_URL}/chat",
-                auth=(st.session_state.username, get_password()),
-                json={"message": user_input},
-            )
+            try:
+                response = requests.post(
+                    f"{API_URL}/chat",
+                    auth=(st.session_state.username, get_password()),
+                    json={
+                        "message": user_input,
+                        "history": build_history_payload(),   # ← NEW
+                    },
+                    timeout=30,
+                )
+            except requests.exceptions.ConnectionError:
+                st.error("⚠️ Cannot reach the server. Is FastAPI running?")
+                st.stop()
 
         if response.status_code == 200:
             data    = response.json()

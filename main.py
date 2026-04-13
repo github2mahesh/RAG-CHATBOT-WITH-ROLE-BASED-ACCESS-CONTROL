@@ -97,13 +97,13 @@ else:
     )
 
 load_dotenv()
+app = FastAPI()
+security = HTTPBasic()
 
 llm = ChatGroq(
         model="openai/gpt-oss-120b",
         api_key=os.getenv("GROQ_API_KEY")
     )
-
-security = HTTPBasic()
 # ─── USER DATABASE ────────────────────────────────────────────
 users_db: Dict[str, Dict[str, str]] = {
     "Tony":    {"password": "password123", "role": "engineering"},
@@ -136,22 +136,63 @@ def authenticate(credentials: HTTPBasicCredentials = Depends(security)):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return {"username": credentials.username, "role": user["role"]}
 
-app = FastAPI()
 
-# ─── REQUEST BODY ─────────────────────────────────────────────
+# ── Message model (one turn in history) ──────────────────────────
+class Message(BaseModel):
+    role: str       # "user" or "assistant"
+    content: str
+
+# ── Updated request body ──────────────────────────────────────────
 class ChatRequest(BaseModel):
     message: str
+    history: list[Message] = []   # ← new, defaults to empty list
+                                  # so old callers don't break
 
 # ─── ENDPOINTS ────────────────────────────────────────────────
 @app.get("/login")
 def login(user=Depends(authenticate)):
     return {"message": f"Welcome {user['username']}!", "role": user["role"]}
 
+def rewrite_query(query: str, history: list[Message]) -> str:
+    """
+    If there's no history, the query is already standalone — return as is.
+    If there IS history, ask the LLM to rewrite the query so it makes
+    sense without needing to read the conversation.
+    """
+    if not history:
+        return query
+
+    # Build a readable transcript of the last 6 turns (3 exchanges)
+    # We cap it — sending 50 turns of history to rewrite a query is wasteful
+    recent = history[-6:]
+    transcript = "\n".join(
+        f"{msg.role.upper()}: {msg.content}"
+        for msg in recent
+    )
+
+    rewrite_prompt = [
+        ("system",
+         "You are a query rewriter. Given a conversation and a follow-up question, "
+         "rewrite the follow-up into a single standalone question that contains all "
+         "necessary context from the conversation. "
+         "Output ONLY the rewritten question. No explanation, no prefix, no quotes."),
+        ("human",
+         f"Conversation:\n{transcript}\n\n"
+         f"Follow-up question: {query}\n\n"
+         f"Standalone question:"),
+    ]
+
+    result = llm.invoke(rewrite_prompt)
+    rewritten = result.content.strip()
+
+    # Safety net — if rewriter returns something empty, fall back to original
+    return rewritten if rewritten else query
 
 @app.post("/chat")
 def chat(body: ChatRequest, user=Depends(authenticate)):
     role      = user["role"]
     query     = body.message
+    history = body.history 
     allowed   = ROLE_DEPT_MAP.get(role)   # None = no restriction
 
     input_check = check_input(query)
@@ -161,21 +202,23 @@ def chat(body: ChatRequest, user=Depends(authenticate)):
             "sources": [],
             "blocked": True,           # flag so Streamlit can style it differently
         }
+    # ── Rewrite query using history ───────────────────────────────
+    standalone_query = rewrite_query(query, history)
 
     # Build ChromaDB filter
     if allowed is None:
         # c-level: no filter, search all documents
-        results = vector_store.similarity_search(query, k=5)
+        results = vector_store.similarity_search(standalone_query, k=5)        
     elif len(allowed) == 1:
         # Single department: simple equality filter
         results = vector_store.similarity_search(
-            query, k=5,
+            standalone_query, k=5,
             filter={"department": allowed[0]}
         )
     else:
         # Multiple departments: $in operator
         results = vector_store.similarity_search(
-            query, k=5,
+            standalone_query, k=5,
             filter={"department": {"$in": allowed}}
         )
 
@@ -192,14 +235,25 @@ def chat(body: ChatRequest, user=Depends(authenticate)):
         for doc in results
     })
 
+    history_text = ""                                                      
+    if history:                                                            
+        recent = history[-6:]                                              
+        history_text = "\n".join(                                         
+            f"{msg.role.upper()}: {msg.content}"                          
+            for msg in recent                                             
+        )
+
     # Prompt
     messages = [
-        ("system",
-         "You are a company assistant. Answer ONLY using the provided context. "
-         "If the answer is not in the context, say 'I don't know'. "
-         f"you have access to only {role}, if they ask you anything other than {role}, just say I dont have access"
-         "Be concise and factual. If they wish you hi, hello, good morning etc you can also wish"),
-        ("human", f"Context:\n{context}\n\nQuestion: {query}"),
+    ("system",
+     "You are a company assistant. Answer ONLY using the provided context. "
+     "If the answer is not in the context, say 'I don't know'. "
+     f"You have access to {role} data only. If asked about other departments, say you don't have access. "
+     "Be concise and factual. Greetings like hi/hello can be responded to normally."),
+    ("human", 
+    f"Context:\n{context}\n\n"
+    f"Conversation so far:\n{history_text}\n\n"
+    f"Question: {query}"),
     ]
 
     response = llm.invoke(messages)

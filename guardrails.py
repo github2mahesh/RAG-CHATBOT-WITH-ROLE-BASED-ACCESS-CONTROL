@@ -1,4 +1,3 @@
-# guardrails.py
 import re
 from dataclasses import dataclass
 
@@ -105,4 +104,3 @@ def check_output(answer: str) -> GuardrailResult:
         )
 
     return GuardrailResult(passed=True, cleaned_text=answer)
-    
