@@ -125,20 +125,30 @@ def show_chat():
             )
 
         if response.status_code == 200:
-            data   = response.json()
+            data    = response.json()
             answer  = data["answer"]
             sources = data.get("sources", [])
+            blocked  = data.get("blocked", False)
+            redacted = data.get("redacted", False)
         else:
             answer  = "⚠️ Something went wrong. Please try again."
             sources = []
-
+            blocked = False
+            redacted = False
+        
         # 4. Show the assistant reply
         with st.chat_message("assistant"):
-            st.write(answer)
-            if sources:
-                with st.expander("📄 Sources"):
-                    for src in sources:
-                        st.write(f"• {src}")
+            if blocked:
+                # Guardrail blocked the query — show as a warning, not an error
+                st.warning(answer)
+            else:
+                st.write(answer)
+                if redacted:
+                    st.caption("⚠️ Some sensitive information was redacted from this response.")
+                if sources:
+                    with st.expander("📄 Sources"):
+                        for src in sources:
+                            st.write(f"• {src}")
 
         # 5. Save assistant reply to history
         st.session_state.chat_history.append({

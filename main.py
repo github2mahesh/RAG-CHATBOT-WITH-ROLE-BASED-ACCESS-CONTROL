@@ -9,6 +9,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from typing import Dict, List
 from pydantic import BaseModel
+from guardrails import check_input, check_output
 
 base_path = "data"
 
@@ -153,6 +154,14 @@ def chat(body: ChatRequest, user=Depends(authenticate)):
     query     = body.message
     allowed   = ROLE_DEPT_MAP.get(role)   # None = no restriction
 
+    input_check = check_input(query)
+    if not input_check.passed:
+        return {
+            "answer":  input_check.reason,
+            "sources": [],
+            "blocked": True,           # flag so Streamlit can style it differently
+        }
+
     # Build ChromaDB filter
     if allowed is None:
         # c-level: no filter, search all documents
@@ -194,10 +203,16 @@ def chat(body: ChatRequest, user=Depends(authenticate)):
     ]
 
     response = llm.invoke(messages)
+    raw_answer = response.content
+
+    # ── OUTPUT GUARDRAIL ──────────────────────────────────────────
+    output_check = check_output(raw_answer)
+    final_answer = output_check.cleaned_text   # redacted if PII found, original otherwise
 
     return {
-        "answer":  response.content,
-        "sources": sources,         
-        "role":    role,
+        "answer":   final_answer,
+        "sources":  sources,
+        "blocked":  False,
+        "redacted": not output_check.passed,   # True if something was redacted
     }
 
