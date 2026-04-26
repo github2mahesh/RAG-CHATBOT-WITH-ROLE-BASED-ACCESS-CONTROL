@@ -42,15 +42,17 @@ IN_SCOPE_KEYWORDS = [
     "how", "why", "explain", "summarise", "summarize", "list", "show",
 ]
 
+OUT_OF_SCOPE_PATTERNS = [
+    re.compile(r"\b(recipe|cooking|food|pizza|burger|restaurant)\b", re.I),
+    re.compile(r"\b(weather|forecast|temperature|rain|sunny)\b", re.I),
+    re.compile(r"\b(movie|film|series|netflix|sport|cricket|football)\b", re.I),
+    re.compile(r"\b(joke|funny|meme|game|gaming)\b", re.I),
+]
+
 def check_input(query: str) -> GuardrailResult:
-    """
-    Run two checks on the raw user query:
-    1. Does it contain PII the user accidentally typed?
-    2. Is it related to company business at all?
-    """
     query_lower = query.lower()
 
-    # ── Check 1: PII in the query ─────────────────────────────────
+    # Check 1: PII
     for label, pattern in PII_PATTERNS:
         if pattern.search(query):
             return GuardrailResult(
@@ -61,11 +63,23 @@ def check_input(query: str) -> GuardrailResult:
                 ),
             )
 
-    # ── Check 2: Out-of-scope ─────────────────────────────────────
-    # Short messages (greetings, clarifications) are always allowed
+    # Short messages always allowed
     if len(query.split()) <= 5:
         return GuardrailResult(passed=True)
 
+    # Check 2: Explicit out of scope patterns  ← NEW
+    for pattern in OUT_OF_SCOPE_PATTERNS:
+        if pattern.search(query_lower):
+            return GuardrailResult(
+                passed=False,
+                reason=(
+                    "I can only help with company-related questions — "
+                    "finance, HR, marketing, engineering, or general policies. "
+                    "Your question seems outside that scope."
+                ),
+            )
+
+    # Check 3: Must contain at least one in-scope keyword
     has_topic = any(kw in query_lower for kw in IN_SCOPE_KEYWORDS)
     if not has_topic:
         return GuardrailResult(
