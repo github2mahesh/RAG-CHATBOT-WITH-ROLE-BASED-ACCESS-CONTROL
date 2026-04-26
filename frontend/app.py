@@ -186,8 +186,140 @@ def show_chat():
             "sources": sources,
         })
 
-# ── Router — decides which screen to show ────────────────────────
+def show_dashboard():
+    role_colour = ROLE_COLOURS.get(st.session_state.role, "#888780")
+
+    col1, col2, col3 = st.columns([4, 1, 1])
+    with col1:
+        st.title("📊 Cost Dashboard")
+    with col2:
+        if st.button("🗑️ Clear"):
+            st.session_state.chat_history = []
+            st.rerun()
+    with col3:
+        if st.button("Log out"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+    st.markdown(
+        f"Logged in as **{st.session_state.username}** &nbsp;"
+        f"<span style='background:{role_colour};color:white;"
+        f"padding:2px 10px;border-radius:12px;font-size:13px;'>"
+        f"{st.session_state.role}</span>",
+        unsafe_allow_html=True,
+    )
+    st.divider()
+
+    # Fetch usage data from backend
+    try:
+        response = requests.get(
+            f"{API_URL}/usage",
+            auth=(st.session_state.username, get_password()),
+            timeout=10,
+        )
+    except requests.exceptions.ConnectionError:
+        st.error("Cannot reach the server.")
+        return
+
+    if response.status_code == 403:
+        st.warning("Access denied. Only c-level users can view the cost dashboard.")
+        return
+
+    if response.status_code != 200:
+        st.error("Failed to fetch usage data.")
+        return
+
+    data = response.json()
+
+    if not data:
+        st.info("No usage data yet. Start chatting to see costs.")
+        return
+
+    # ── Summary metrics ───────────────────────────────────────────
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Requests", data["total_requests"])
+    with col2:
+        st.metric("Total Tokens", f"{data['total_tokens']:,}")
+    with col3:
+        st.metric("Total Cost", f"${data['total_cost_usd']:.4f}")
+
+    st.divider()
+
+    # ── Per user breakdown ────────────────────────────────────────
+    st.subheader("💰 Cost by User")
+    by_user = data.get("by_user", {})
+    if by_user:
+        for username, stats in sorted(
+            by_user.items(),
+            key=lambda x: x[1]["cost"],
+            reverse=True
+        ):
+            col1, col2, col3 = st.columns([3, 2, 2])
+            with col1:
+                st.write(f"**{username}**")
+            with col2:
+                st.write(f"{stats['requests']} requests")
+            with col3:
+                st.write(f"${stats['cost']:.4f}")
+
+    st.divider()
+
+    # ── Per role breakdown ────────────────────────────────────────
+    st.subheader("🎭 Cost by Role")
+    by_role = data.get("by_role", {})
+    if by_role:
+        for role, stats in sorted(
+            by_role.items(),
+            key=lambda x: x[1]["cost"],
+            reverse=True
+        ):
+            role_colour = ROLE_COLOURS.get(role, "#888780")
+            col1, col2, col3 = st.columns([3, 2, 2])
+            with col1:
+                st.markdown(
+                    f"<span style='background:{role_colour};color:white;"
+                    f"padding:2px 8px;border-radius:8px;font-size:12px;'>"
+                    f"{role}</span>",
+                    unsafe_allow_html=True,
+                )
+            with col2:
+                st.write(f"{stats['requests']} requests")
+            with col3:
+                st.write(f"${stats['cost']:.4f}")
+
+    st.divider()
+
+    # ── Daily trend ───────────────────────────────────────────────
+    st.subheader("📅 Daily Spend")
+    by_day = data.get("by_day", {})
+    if by_day:
+        for day, stats in sorted(by_day.items()):
+            col1, col2, col3 = st.columns([3, 2, 2])
+            with col1:
+                st.write(day)
+            with col2:
+                st.write(f"{stats['requests']} requests")
+            with col3:
+                st.write(f"${stats['cost']:.4f}")
+
+# ── Router ────────────────────────────────────────────────────────
 if st.session_state.logged_in:
-    show_chat()
+    # Sidebar navigation — only show dashboard to c-level
+    if st.session_state.role == "c-level":
+        page = st.sidebar.radio(
+            "Navigation",
+            ["💬 Chat", "📊 Cost Dashboard"]
+        )
+    else:
+        page = "💬 Chat"
+
+    if page == "💬 Chat":
+        show_chat()
+    else:
+        show_dashboard()
 else:
     show_login()
+
+

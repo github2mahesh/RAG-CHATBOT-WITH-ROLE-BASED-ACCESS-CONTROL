@@ -11,6 +11,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from typing import Dict, List
 from pydantic import BaseModel
 from guardrails import check_input, check_output
+from cost_tracker import log_usage, check_alerts, get_summary
 
 base_path = "data"
 
@@ -209,10 +210,20 @@ def chat(body: ChatRequest, user=Depends(authenticate)):
 
     input_check = check_input(query)
     if not input_check.passed:
+        log_usage(
+            username      = user["username"],
+            role          = role,
+            query         = query,
+            input_tokens  = 0,
+            output_tokens = 0,
+            model         = "llama3-70b-8192",
+            blocked       = True,
+        )
         return {
             "answer":  input_check.reason,
             "sources": [],
-            "blocked": True,           # flag so Streamlit can style it differently
+            "blocked": True,
+            "alerts":  [],
         }
     # ── Rewrite query using history ───────────────────────────────
     standalone_query = rewrite_query(query, history)
@@ -271,6 +282,23 @@ def chat(body: ChatRequest, user=Depends(authenticate)):
     response = llm.invoke(messages)
     raw_answer = response.content
 
+    # ── Track token usage ─────────────────────────────────────────
+    usage = response.response_metadata.get("token_usage", {})
+    input_tokens  = usage.get("prompt_tokens", 0)
+    output_tokens = usage.get("completion_tokens", 0)
+
+    log_usage(
+        username      = user["username"],
+        role          = role,
+        query         = query,
+        input_tokens  = input_tokens,
+        output_tokens = output_tokens,
+        model         = "llama3-70b-8192",
+        blocked       = False,
+    )
+
+    alerts = check_alerts(user["username"])
+
     # ── OUTPUT GUARDRAIL ──────────────────────────────────────────
     output_check = check_output(raw_answer)
     final_answer = output_check.cleaned_text   # redacted if PII found, original otherwise
@@ -280,5 +308,14 @@ def chat(body: ChatRequest, user=Depends(authenticate)):
         "sources":  sources,
         "blocked":  False,
         "redacted": not output_check.passed,   # True if something was redacted
+        "alerts":   alerts,
     }
 
+@app.get("/usage")
+def usage(user=Depends(authenticate)):
+    if user["role"] != "c-level":
+        raise HTTPException(
+            status_code=403,
+            detail="Only c-level users can view usage data"
+        )
+    return get_summary()

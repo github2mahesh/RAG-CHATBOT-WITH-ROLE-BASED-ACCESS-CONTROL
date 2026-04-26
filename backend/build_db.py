@@ -12,7 +12,7 @@ from pathlib import Path
 
 load_dotenv()
 
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).parent
 base_path = str(ROOT / "data")
 persist_dir = str(ROOT / "chroma_db")
 
