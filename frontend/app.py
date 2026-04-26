@@ -1,8 +1,11 @@
 import streamlit as st
 import requests
 
+import os
+API_URL = os.getenv("API_URL", "http://localhost:8000")
+
 # ── FastAPI base URL ──────────────────────────────────────────────
-API_URL = "http://localhost:8000"
+# API_URL = "http://localhost:8000"
 
 # ── Page config (must be the FIRST Streamlit call) ───────────────
 st.set_page_config(

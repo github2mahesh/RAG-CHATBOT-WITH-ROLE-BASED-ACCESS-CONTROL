@@ -1,6 +1,7 @@
-from langchain_community.document_loaders import UnstructuredMarkdownLoader, CSVLoader
+from langchain_community.document_loaders import CSVLoader
+from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEndpointEmbeddings
 from langchain_chroma import Chroma
 from langchain_groq import ChatGroq
 import os
@@ -23,12 +24,19 @@ for dept in os.listdir(base_path):
             file_path = os.path.join(dept_path, file)
 
             if file.endswith(".md"):
-                loader = UnstructuredMarkdownLoader(file_path)
-                docs = loader.load()
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                docs = [Document(
+                    page_content=content,
+                    metadata={"department": dept, "source_file": file}
+                )]
 
             elif file.endswith(".csv"):
                 loader = CSVLoader(file_path)
                 docs = loader.load()
+                for doc in docs:
+                    doc.metadata["department"] = dept
+                    doc.metadata["source_file"] = file
 
             else:
                 continue
@@ -75,7 +83,11 @@ for doc in all_docs:
         final_chunks.extend(split_chunks)
 
 # create embedding model
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+embeddings = HuggingFaceEndpointEmbeddings(
+    model="sentence-transformers/all-MiniLM-L6-v2",
+    task="feature-extraction",
+    huggingfacehub_api_token=os.getenv("HF_TOKEN"),
+)
 
 persist_dir = "chroma_db"
 
