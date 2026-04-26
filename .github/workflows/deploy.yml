@@ -1,0 +1,97 @@
+name: Eval and Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+
+  eval:
+    name: Run eval suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Install test dependencies
+        run: pip install pytest requests
+
+      - name: Build vector database
+        run: |
+          cd backend
+          python build_db.py
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      - name: Start FastAPI server
+        run: |
+          cd backend
+          uvicorn main:app --host 0.0.0.0 --port 8000 &
+          sleep 15
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      - name: Run evals
+        run: pytest tests/test_evals.py -v
+
+  deploy:
+    name: Deploy to Azure
+    runs-on: ubuntu-latest
+    needs: eval
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push backend
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --provenance=false \
+            -t ${{ secrets.ACR_LOGIN_SERVER }}/backend:${{ github.sha }} \
+            -f backend/Dockerfile .
+          docker push ${{ secrets.ACR_LOGIN_SERVER }}/backend:${{ github.sha }}
+
+      - name: Build and push frontend
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --provenance=false \
+            -t ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ github.sha }} \
+            ./frontend
+          docker push ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ github.sha }}
+
+      - name: Deploy backend to Azure
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          acrName: ${{ secrets.ACR_NAME }}
+          containerAppName: chatbot-backend
+          resourceGroup: rg-chatbot
+          imageToDeploy: ${{ secrets.ACR_LOGIN_SERVER }}/backend:${{ github.sha }}
+
+      - name: Deploy frontend to Azure
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          acrName: ${{ secrets.ACR_NAME }}
+          containerAppName: chatbot-frontend
+          resourceGroup: rg-chatbot
+          imageToDeploy: ${{ secrets.ACR_LOGIN_SERVER }}/frontend:${{ github.sha }}
