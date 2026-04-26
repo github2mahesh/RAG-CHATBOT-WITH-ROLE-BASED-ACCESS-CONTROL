@@ -8,11 +8,13 @@ from langchain_huggingface import HuggingFaceEndpointEmbeddings
 from langchain_chroma import Chroma
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 
 load_dotenv()
 
-base_path = "data"
-persist_dir = "chroma_db"
+ROOT = Path(__file__).parent.parent
+base_path = str(ROOT / "data")
+persist_dir = str(ROOT / "chroma_db")
 
 print("Building vector database from data/ folder...")
 
