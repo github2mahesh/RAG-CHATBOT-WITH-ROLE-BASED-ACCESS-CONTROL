@@ -38,7 +38,15 @@ jobs:
         run: |
           cd backend
           uvicorn main:app --host 0.0.0.0 --port 8000 &
-          sleep 15
+          echo "Waiting for server to be ready..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8000/docs > /dev/null; then
+              echo "Server is ready after ${i} attempts"
+              break
+            fi
+            echo "Attempt $i - server not ready yet, waiting 5s..."
+            sleep 5
+          done
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
